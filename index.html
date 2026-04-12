@@ -1,0 +1,1231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DiskWatch — System Monitor</title>
+
+  <!-- Fonts: DM Mono for that precise terminal feel + DM Sans for UI -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet" />
+
+  <!-- Chart.js for the usage graph -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+
+  <style>
+    /* ── Design Tokens ────────────────────────────────────────── */
+    :root {
+      --bg:          #0a0c10;
+      --surface:     #0f1318;
+      --surface2:    #161b24;
+      --border:      #1e2530;
+      --border2:     #2a3445;
+
+      --text:        #e8edf5;
+      --text-dim:    #6b7a94;
+      --text-muted:  #3d4a5c;
+
+      --green:       #22d3a1;
+      --green-dim:   rgba(34,211,161,0.12);
+      --yellow:      #f5c842;
+      --yellow-dim:  rgba(245,200,66,0.12);
+      --red:         #ff4d6a;
+      --red-dim:     rgba(255,77,106,0.12);
+      --blue:        #4d9fff;
+
+      --radius:      12px;
+      --radius-lg:   18px;
+      --mono:        'DM Mono', monospace;
+      --sans:        'DM Sans', sans-serif;
+    }
+
+    /* ── Reset & Base ─────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--sans);
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    /* subtle grid texture */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background-image:
+        linear-gradient(rgba(255,255,255,0.015) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.015) 1px, transparent 1px);
+      background-size: 40px 40px;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    /* ── Layout ───────────────────────────────────────────────── */
+    .page { position: relative; z-index: 1; max-width: 1100px; margin: 0 auto; padding: 0 24px 80px; }
+
+    /* ── Header ───────────────────────────────────────────────── */
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 32px 0 28px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 32px;
+    }
+
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .logo-icon {
+      width: 38px; height: 38px;
+      background: linear-gradient(135deg, var(--green), #0ea5e9);
+      border-radius: 10px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 18px;
+    }
+
+    .logo-text {
+      font-family: var(--mono);
+      font-size: 20px;
+      font-weight: 500;
+      letter-spacing: -0.3px;
+    }
+
+    .logo-sub {
+      font-size: 11px;
+      color: var(--text-dim);
+      font-family: var(--mono);
+      margin-top: 1px;
+    }
+
+    .header-right {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+
+    /* Live pulse indicator */
+    .pulse-wrap {
+      display: flex; align-items: center; gap: 8px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 100px;
+      padding: 6px 14px 6px 10px;
+    }
+
+    .pulse-dot {
+      width: 8px; height: 8px;
+      background: var(--green);
+      border-radius: 50%;
+      animation: pulse 2s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); box-shadow: 0 0 0 0 rgba(34,211,161,0.4); }
+      50% { opacity: 0.7; transform: scale(0.9); box-shadow: 0 0 0 6px rgba(34,211,161,0); }
+    }
+
+    .pulse-label {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--text-dim);
+    }
+
+    /* Refresh & Dark mode buttons */
+    .btn-icon {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 10px;
+      cursor: pointer;
+      color: var(--text-dim);
+      font-size: 15px;
+      transition: all 0.2s;
+      display: flex; align-items: center; gap: 6px;
+      font-family: var(--sans);
+      font-size: 12px;
+      font-weight: 500;
+    }
+
+    .btn-icon:hover { background: var(--border); color: var(--text); border-color: var(--border2); }
+
+    /* Countdown ring */
+    #countdown-text {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--text-dim);
+    }
+
+    /* ── Alert Banner ─────────────────────────────────────────── */
+    #alert-banner {
+      display: none;
+      align-items: center;
+      gap: 12px;
+      padding: 14px 20px;
+      border-radius: var(--radius);
+      margin-bottom: 24px;
+      animation: slideDown 0.3s ease;
+      font-size: 14px;
+      font-weight: 500;
+      position: relative;
+    }
+
+    @keyframes slideDown {
+      from { opacity: 0; transform: translateY(-12px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    #alert-banner.warning {
+      background: var(--yellow-dim);
+      border: 1px solid var(--yellow);
+      color: var(--yellow);
+    }
+
+    #alert-banner.critical {
+      background: var(--red-dim);
+      border: 1px solid var(--red);
+      color: var(--red);
+      animation: slideDown 0.3s ease, criticalPulse 1.5s ease-in-out infinite;
+    }
+
+    @keyframes criticalPulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(255,77,106,0); }
+      50% { box-shadow: 0 0 20px 2px rgba(255,77,106,0.2); }
+    }
+
+    .banner-close {
+      margin-left: auto;
+      cursor: pointer;
+      opacity: 0.6;
+      background: none; border: none; color: inherit;
+      font-size: 18px; line-height: 1;
+    }
+
+    .banner-close:hover { opacity: 1; }
+
+    /* ── Toast ────────────────────────────────────────────────── */
+    #toast-container {
+      position: fixed;
+      top: 24px; right: 24px;
+      z-index: 9999;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .toast {
+      background: var(--surface2);
+      border: 1px solid var(--border2);
+      border-radius: var(--radius);
+      padding: 14px 18px;
+      min-width: 280px;
+      max-width: 360px;
+      animation: toastIn 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+      box-shadow: 0 8px 40px rgba(0,0,0,0.5);
+    }
+
+    .toast.critical { border-color: var(--red); border-left: 3px solid var(--red); }
+    .toast.warning  { border-color: var(--yellow); border-left: 3px solid var(--yellow); }
+
+    @keyframes toastIn {
+      from { opacity: 0; transform: translateX(40px) scale(0.95); }
+      to   { opacity: 1; transform: translateX(0) scale(1); }
+    }
+
+    .toast-title {
+      font-size: 13px;
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+
+    .toast-title.critical { color: var(--red); }
+    .toast-title.warning  { color: var(--yellow); }
+
+    .toast-body { font-size: 12px; color: var(--text-dim); }
+
+    /* ── Status Summary Bar ───────────────────────────────────── */
+    .status-bar {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 24px;
+    }
+
+    .stat-pill {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 100px;
+      padding: 7px 16px;
+      font-family: var(--mono);
+      font-size: 12px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .stat-pill span { color: var(--text-dim); }
+    .stat-pill strong { color: var(--text); }
+
+    /* ── Disk Cards ───────────────────────────────────────────── */
+    .disks-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+      gap: 18px;
+      margin-bottom: 28px;
+    }
+
+    .disk-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 24px;
+      transition: border-color 0.3s, transform 0.2s;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .disk-card::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 2px;
+      background: transparent;
+      transition: background 0.3s;
+    }
+
+    .disk-card.normal::before  { background: linear-gradient(90deg, var(--green), transparent); }
+    .disk-card.warning::before { background: linear-gradient(90deg, var(--yellow), transparent); }
+    .disk-card.critical::before { background: linear-gradient(90deg, var(--red), transparent); }
+
+    .disk-card:hover { transform: translateY(-2px); border-color: var(--border2); }
+    .disk-card.critical { border-color: rgba(255,77,106,0.3); }
+    .disk-card.warning  { border-color: rgba(245,200,66,0.3); }
+
+    /* Card header row */
+    .card-top {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      margin-bottom: 20px;
+    }
+
+    .card-title {
+      font-family: var(--mono);
+      font-size: 13px;
+      color: var(--text-dim);
+      margin-bottom: 3px;
+    }
+
+    .card-mount {
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--text);
+    }
+
+    .status-badge {
+      font-family: var(--mono);
+      font-size: 10px;
+      font-weight: 500;
+      padding: 4px 10px;
+      border-radius: 100px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .status-badge.normal   { background: var(--green-dim);  color: var(--green);  border: 1px solid rgba(34,211,161,0.3); }
+    .status-badge.warning  { background: var(--yellow-dim); color: var(--yellow); border: 1px solid rgba(245,200,66,0.3); }
+    .status-badge.critical { background: var(--red-dim);    color: var(--red);    border: 1px solid rgba(255,77,106,0.3); }
+
+    /* Usage percent big display */
+    .usage-display {
+      display: flex;
+      align-items: baseline;
+      gap: 6px;
+      margin-bottom: 12px;
+    }
+
+    .usage-pct {
+      font-family: var(--mono);
+      font-size: 42px;
+      font-weight: 300;
+      line-height: 1;
+      transition: color 0.4s;
+    }
+
+    .usage-pct.normal   { color: var(--green); }
+    .usage-pct.warning  { color: var(--yellow); }
+    .usage-pct.critical { color: var(--red); }
+
+    .usage-label { font-size: 13px; color: var(--text-dim); margin-bottom: 4px; }
+
+    /* Progress bar */
+    .progress-track {
+      width: 100%;
+      height: 6px;
+      background: var(--surface2);
+      border-radius: 100px;
+      overflow: hidden;
+      margin-bottom: 18px;
+    }
+
+    .progress-fill {
+      height: 100%;
+      border-radius: 100px;
+      transition: width 0.8s cubic-bezier(0.4, 0, 0.2, 1), background 0.4s;
+    }
+
+    .progress-fill.normal   { background: linear-gradient(90deg, #1db870, var(--green)); }
+    .progress-fill.warning  { background: linear-gradient(90deg, #d9a520, var(--yellow)); }
+    .progress-fill.critical { background: linear-gradient(90deg, #cc2244, var(--red)); }
+
+    /* Threshold markers */
+    .progress-markers {
+      position: relative;
+      height: 0;
+      top: -22px;
+      margin-bottom: -22px;
+    }
+
+    .marker {
+      position: absolute;
+      top: 0;
+      width: 2px;
+      height: 6px;
+      border-radius: 1px;
+      transform: translateX(-1px);
+    }
+
+    .marker.warning-mark  { background: var(--yellow); opacity: 0.6; }
+    .marker.critical-mark { background: var(--red);    opacity: 0.6; }
+
+    /* Space stats */
+    .space-stats {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 10px;
+      padding-top: 16px;
+      border-top: 1px solid var(--border);
+    }
+
+    .space-stat { text-align: center; }
+
+    .space-value {
+      font-family: var(--mono);
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--text);
+      display: block;
+      margin-bottom: 2px;
+    }
+
+    .space-key {
+      font-size: 11px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    /* Threshold controls */
+    .threshold-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 14px;
+      padding-top: 14px;
+      border-top: 1px solid var(--border);
+    }
+
+    .threshold-label {
+      font-size: 11px;
+      color: var(--text-muted);
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+
+    .threshold-inputs {
+      display: flex;
+      gap: 6px;
+      flex: 1;
+    }
+
+    .threshold-input-wrap {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      padding: 4px 8px;
+      flex: 1;
+    }
+
+    .threshold-input-wrap:focus-within { border-color: var(--border2); }
+
+    .threshold-dot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+
+    .threshold-dot.warn { background: var(--yellow); }
+    .threshold-dot.crit { background: var(--red); }
+
+    .threshold-input {
+      background: none;
+      border: none;
+      outline: none;
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--text);
+      width: 35px;
+    }
+
+    .threshold-unit {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    .threshold-save {
+      background: var(--surface2);
+      border: 1px solid var(--border2);
+      border-radius: 7px;
+      color: var(--blue);
+      font-family: var(--mono);
+      font-size: 11px;
+      padding: 5px 12px;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: all 0.2s;
+    }
+
+    .threshold-save:hover { background: rgba(77,159,255,0.12); border-color: var(--blue); }
+
+    /* Skeleton loader */
+    .skeleton-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 24px;
+      animation: shimmer 1.5s ease-in-out infinite;
+    }
+
+    .skel-line {
+      background: var(--surface2);
+      border-radius: 6px;
+      margin-bottom: 12px;
+    }
+
+    @keyframes shimmer {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.6; }
+    }
+
+    /* ── Chart Section ────────────────────────────────────────── */
+    .section-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 16px;
+    }
+
+    .section-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .section-title::before {
+      content: '';
+      display: block;
+      width: 3px;
+      height: 14px;
+      background: var(--green);
+      border-radius: 2px;
+    }
+
+    .chart-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 24px;
+      margin-bottom: 28px;
+    }
+
+    .chart-tabs {
+      display: flex;
+      gap: 6px;
+    }
+
+    .chart-tab {
+      background: none;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      padding: 5px 12px;
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--text-dim);
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .chart-tab.active {
+      background: var(--surface2);
+      color: var(--text);
+      border-color: var(--border2);
+    }
+
+    .chart-container {
+      height: 200px;
+      margin-top: 20px;
+    }
+
+    /* ── Alerts Log ───────────────────────────────────────────── */
+    .alerts-section { margin-bottom: 28px; }
+
+    .alert-log-item {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 12px 16px;
+      border-radius: var(--radius);
+      border: 1px solid var(--border);
+      margin-bottom: 8px;
+      background: var(--surface);
+      font-size: 13px;
+      transition: border-color 0.2s;
+    }
+
+    .alert-log-item:hover { border-color: var(--border2); }
+
+    .alert-log-item.critical { border-left: 2px solid var(--red); }
+    .alert-log-item.warning  { border-left: 2px solid var(--yellow); }
+
+    .alert-icon { font-size: 16px; }
+    .alert-log-msg { flex: 1; color: var(--text-dim); }
+    .alert-log-msg strong { color: var(--text); font-weight: 500; }
+
+    .alert-log-time {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--text-muted);
+      flex-shrink: 0;
+    }
+
+    .empty-state {
+      text-align: center;
+      padding: 40px;
+      color: var(--text-muted);
+      font-size: 13px;
+      font-family: var(--mono);
+    }
+
+    /* ── Export Button ────────────────────────────────────────── */
+    .export-btn {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text-dim);
+      font-family: var(--sans);
+      font-size: 12px;
+      font-weight: 500;
+      padding: 8px 16px;
+      cursor: pointer;
+      transition: all 0.2s;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .export-btn:hover { color: var(--text); border-color: var(--border2); }
+
+    /* ── Light Mode ───────────────────────────────────────────── */
+    body.light {
+      --bg:       #f4f6fa;
+      --surface:  #ffffff;
+      --surface2: #f0f2f8;
+      --border:   #dde2ec;
+      --border2:  #c8d0e0;
+      --text:     #111827;
+      --text-dim: #6b7a94;
+      --text-muted: #aab0c0;
+    }
+
+    body.light::before {
+      background-image:
+        linear-gradient(rgba(0,0,0,0.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(0,0,0,0.03) 1px, transparent 1px);
+    }
+
+    /* ── Responsive ───────────────────────────────────────────── */
+    @media (max-width: 600px) {
+      .status-bar { flex-wrap: wrap; }
+      header { flex-wrap: wrap; gap: 12px; }
+    }
+
+    /* ── Connection Error ─────────────────────────────────────── */
+    #connection-err {
+      display: none;
+      background: var(--red-dim);
+      border: 1px solid var(--red);
+      color: var(--red);
+      border-radius: var(--radius);
+      padding: 12px 18px;
+      font-size: 13px;
+      margin-bottom: 20px;
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+
+    <!-- ── Header ── -->
+    <header>
+      <div class="logo">
+        <div class="logo-icon">💾</div>
+        <div>
+          <div class="logo-text">DiskWatch</div>
+          <div class="logo-sub">System Monitor</div>
+        </div>
+      </div>
+
+      <div class="header-right">
+        <div class="pulse-wrap">
+          <div class="pulse-dot" id="pulse-dot"></div>
+          <span class="pulse-label">LIVE · <span id="countdown-text">3s</span></span>
+        </div>
+        <button class="btn-icon" onclick="manualRefresh()">↻ Refresh</button>
+        <button class="btn-icon" onclick="toggleTheme()">◑ Theme</button>
+      </div>
+    </header>
+
+    <!-- ── Alert Banner ── -->
+    <div id="alert-banner">
+      <span id="alert-icon">⚠️</span>
+      <span id="alert-message">Alert message here</span>
+      <button class="banner-close" onclick="dismissBanner()">✕</button>
+    </div>
+
+    <!-- ── Connection Error ── -->
+    <div id="connection-err">
+      ⚡ Cannot reach backend at <strong>localhost:5000</strong>. Make sure the Python server is running.
+    </div>
+
+    <!-- ── Status Bar ── -->
+    <div class="status-bar">
+      <div class="stat-pill"><span>Status</span> <strong id="overall-status">—</strong></div>
+      <div class="stat-pill"><span>Disks</span> <strong id="disk-count">—</strong></div>
+      <div class="stat-pill"><span>Last update</span> <strong id="last-update">—</strong></div>
+      <div class="stat-pill"><span>Polling</span> <strong>3s</strong></div>
+    </div>
+
+    <!-- ── Disk Cards ── -->
+    <div class="section-header">
+      <div class="section-title">Disk Partitions</div>
+    </div>
+
+    <div class="disks-grid" id="disks-grid">
+      <!-- Skeleton loaders -->
+      <div class="skeleton-card" id="skel-1">
+        <div class="skel-line" style="height:14px;width:60%"></div>
+        <div class="skel-line" style="height:40px;width:40%;margin-top:16px"></div>
+        <div class="skel-line" style="height:6px;width:100%;margin-top:16px"></div>
+        <div class="skel-line" style="height:12px;width:80%;margin-top:20px"></div>
+      </div>
+    </div>
+
+    <!-- ── Chart ── -->
+    <div class="section-header" style="margin-top:8px">
+      <div class="section-title">Usage History</div>
+      <div class="chart-tabs" id="chart-tabs"></div>
+    </div>
+
+    <div class="chart-card">
+      <div class="chart-container">
+        <canvas id="history-chart"></canvas>
+      </div>
+    </div>
+
+    <!-- ── Alerts Log ── -->
+    <div class="alerts-section">
+      <div class="section-header">
+        <div class="section-title">Recent Alerts</div>
+        <button class="export-btn" onclick="exportCSV()">⬇ Export CSV</button>
+      </div>
+      <div id="alerts-log">
+        <div class="empty-state">No alerts triggered yet.</div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ── Toast Container ── -->
+  <div id="toast-container"></div>
+
+  <!-- ── JavaScript ── -->
+  <script>
+    /* ── Config ── */
+    const API = 'http://localhost:5000/api';
+    const POLL_MS = 3000;   // Frontend polls every 3 seconds
+    const COUNTDOWN = 3;
+
+    /* ── State ── */
+    let diskData = [];           // Current disk info
+    let prevStatuses = {};       // Track previous statuses for change detection
+    let bannerDismissed = false; // User dismissed banner for current event
+    let chart = null;            // Chart.js instance
+    let activeChartDisk = null;  // Which disk is shown in chart
+    let alertLog = [];           // Local alert history for the log
+    let countdownVal = COUNTDOWN;
+
+    /* ── Chart Setup ── */
+    function initChart() {
+      const ctx = document.getElementById('history-chart').getContext('2d');
+      chart = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: [],
+          datasets: [{
+            label: 'Usage %',
+            data: [],
+            borderColor: '#22d3a1',
+            backgroundColor: 'rgba(34,211,161,0.07)',
+            borderWidth: 2,
+            fill: true,
+            tension: 0.4,
+            pointRadius: 3,
+            pointBackgroundColor: '#22d3a1',
+            pointBorderColor: 'transparent',
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction: { mode: 'index', intersect: false },
+          scales: {
+            x: {
+              grid: { color: 'rgba(255,255,255,0.04)' },
+              ticks: {
+                color: '#6b7a94',
+                font: { family: 'DM Mono', size: 10 },
+                maxTicksLimit: 8,
+              },
+            },
+            y: {
+              min: 0, max: 100,
+              grid: { color: 'rgba(255,255,255,0.04)' },
+              ticks: {
+                color: '#6b7a94',
+                font: { family: 'DM Mono', size: 10 },
+                callback: v => v + '%',
+              },
+            }
+          },
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              backgroundColor: '#161b24',
+              borderColor: '#2a3445',
+              borderWidth: 1,
+              titleFont: { family: 'DM Mono', size: 11 },
+              bodyFont: { family: 'DM Mono', size: 11 },
+              callbacks: {
+                label: ctx => ` Usage: ${ctx.raw.toFixed(1)}%`
+              }
+            }
+          }
+        }
+      });
+    }
+
+    async function loadChartData(diskId) {
+      try {
+        const res = await fetch(`${API}/history/${diskId}`);
+        const history = await res.json();
+        if (!chart || !history.length) return;
+
+        const labels = history.map(h => {
+          const d = new Date(h.recorded_at);
+          return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        });
+        const values = history.map(h => h.usage_percent);
+
+        chart.data.labels = labels;
+        chart.data.datasets[0].data = values;
+
+        // Color the line based on latest status
+        const lastStatus = history[history.length - 1]?.status || 'normal';
+        const colors = { normal: '#22d3a1', warning: '#f5c842', critical: '#ff4d6a' };
+        const col = colors[lastStatus] || '#22d3a1';
+        chart.data.datasets[0].borderColor = col;
+        chart.data.datasets[0].backgroundColor = col + '14';
+        chart.data.datasets[0].pointBackgroundColor = col;
+
+        chart.update('none'); // no animation on update for performance
+      } catch (e) { /* silent */ }
+    }
+
+    function buildChartTabs(disks) {
+      const container = document.getElementById('chart-tabs');
+      container.innerHTML = '';
+      disks.forEach((d, i) => {
+        const btn = document.createElement('button');
+        btn.className = 'chart-tab' + (i === 0 ? ' active' : '');
+        btn.textContent = d.mount_path;
+        btn.dataset.diskId = d.id;
+        btn.onclick = () => {
+          document.querySelectorAll('.chart-tab').forEach(b => b.classList.remove('active'));
+          btn.classList.add('active');
+          activeChartDisk = d.id;
+          loadChartData(d.id);
+        };
+        container.appendChild(btn);
+      });
+      if (!activeChartDisk && disks.length) {
+        activeChartDisk = disks[0].id;
+      }
+    }
+
+    /* ── Disk Cards ── */
+    function formatGB(gb) {
+      if (gb >= 1024) return (gb / 1024).toFixed(1) + ' TB';
+      if (gb < 1) return (gb * 1024).toFixed(0) + ' MB';
+      return gb.toFixed(1) + ' GB';
+    }
+
+    function statusIcon(status) {
+      return { normal: '🟢', warning: '🟡', critical: '🔴' }[status] || '⚪';
+    }
+
+    function renderDisks(disks) {
+      const grid = document.getElementById('disks-grid');
+      grid.innerHTML = '';
+
+      if (!disks.length) {
+        grid.innerHTML = '<div class="empty-state" style="grid-column:1/-1">No disks detected yet. Backend is polling…</div>';
+        return;
+      }
+
+      disks.forEach(d => {
+        const w = d.threshold.warning_percent;
+        const c = d.threshold.critical_percent;
+        const pct = d.usage_percent;
+
+        const card = document.createElement('div');
+        card.className = `disk-card ${d.status}`;
+        card.innerHTML = `
+          <div class="card-top">
+            <div>
+              <div class="card-title">${d.name}</div>
+              <div class="card-mount">${d.mount_path}</div>
+            </div>
+            <span class="status-badge ${d.status}">${statusIcon(d.status)} ${d.status}</span>
+          </div>
+
+          <div class="usage-display">
+            <div class="usage-pct ${d.status}">${pct.toFixed(1)}</div>
+            <div class="usage-label">%<br>used</div>
+          </div>
+
+          <div class="progress-track">
+            <div class="progress-fill ${d.status}" style="width:${Math.min(pct,100)}%"></div>
+          </div>
+          <div class="progress-markers">
+            <div class="marker warning-mark" style="left:${w}%"></div>
+            <div class="marker critical-mark" style="left:${c}%"></div>
+          </div>
+
+          <div class="space-stats">
+            <div class="space-stat">
+              <span class="space-value">${formatGB(d.used_gb)}</span>
+              <span class="space-key">Used</span>
+            </div>
+            <div class="space-stat">
+              <span class="space-value">${formatGB(d.free_gb)}</span>
+              <span class="space-key">Free</span>
+            </div>
+            <div class="space-stat">
+              <span class="space-value">${formatGB(d.total_gb)}</span>
+              <span class="space-key">Total</span>
+            </div>
+          </div>
+
+          <div class="threshold-row">
+            <span class="threshold-label">Thresholds</span>
+            <div class="threshold-inputs">
+              <div class="threshold-input-wrap">
+                <div class="threshold-dot warn"></div>
+                <input class="threshold-input" type="number" min="1" max="99"
+                  value="${w}" id="warn-${d.id}" />
+                <span class="threshold-unit">%</span>
+              </div>
+              <div class="threshold-input-wrap">
+                <div class="threshold-dot crit"></div>
+                <input class="threshold-input" type="number" min="1" max="100"
+                  value="${c}" id="crit-${d.id}" />
+                <span class="threshold-unit">%</span>
+              </div>
+            </div>
+            <button class="threshold-save" onclick="saveThreshold(${d.id})">Set</button>
+          </div>
+        `;
+        grid.appendChild(card);
+      });
+    }
+
+    /* ── Alert System ── */
+    function checkAlerts(disks) {
+      const banner = document.getElementById('alert-banner');
+      const statuses = disks.map(d => d.status);
+      const hasCritical = statuses.includes('critical');
+      const hasWarning = statuses.includes('warning');
+
+      // Detect new alert events (status got worse)
+      disks.forEach(d => {
+        const prev = prevStatuses[d.id];
+        if (prev && prev !== d.status && (d.status === 'critical' || d.status === 'warning')) {
+          if (prev === 'normal' || (prev === 'warning' && d.status === 'critical')) {
+            triggerAlert(d);
+          }
+        }
+        // If status improved, allow future banners
+        if (prev && prev !== 'normal' && d.status === 'normal') {
+          bannerDismissed = false;
+        }
+        prevStatuses[d.id] = d.status;
+      });
+
+      // Update banner
+      if (!bannerDismissed && (hasCritical || hasWarning)) {
+        const worstDisk = disks.find(d => d.status === 'critical') ||
+                          disks.find(d => d.status === 'warning');
+        const type = hasCritical ? 'critical' : 'warning';
+        const icon = hasCritical ? '🚨' : '⚠️';
+        const msg = `${icon} ${worstDisk.mount_path} disk usage is at ${worstDisk.usage_percent.toFixed(1)}% — ${hasCritical ? 'Immediate action required!' : 'Consider freeing space.'}`;
+        banner.className = type;
+        document.getElementById('alert-icon').textContent = icon;
+        document.getElementById('alert-message').textContent = msg;
+        banner.style.display = 'flex';
+      } else if (!hasCritical && !hasWarning) {
+        banner.style.display = 'none';
+      }
+
+      // Update pulse dot color
+      const dot = document.getElementById('pulse-dot');
+      if (hasCritical)      dot.style.background = '#ff4d6a';
+      else if (hasWarning)  dot.style.background = '#f5c842';
+      else                  dot.style.background = '#22d3a1';
+    }
+
+    function triggerAlert(disk) {
+      // Show toast
+      showToast(disk);
+
+      // Add to alert log
+      alertLog.unshift({
+        type: disk.status,
+        msg: `${disk.mount_path} reached ${disk.usage_percent.toFixed(1)}%`,
+        time: new Date(),
+      });
+      if (alertLog.length > 20) alertLog.pop();
+      renderAlertLog();
+
+      // Browser notification (if permitted)
+      if (Notification.permission === 'granted') {
+        new Notification('DiskWatch Alert', {
+          body: `${disk.mount_path} usage: ${disk.usage_percent.toFixed(1)}%`,
+          icon: '💾'
+        });
+      } else if (Notification.permission !== 'denied') {
+        Notification.requestPermission();
+      }
+    }
+
+    function showToast(disk) {
+      const container = document.getElementById('toast-container');
+      const toast = document.createElement('div');
+      toast.className = `toast ${disk.status}`;
+      const icon = disk.status === 'critical' ? '🚨' : '⚠️';
+      toast.innerHTML = `
+        <div class="toast-title ${disk.status}">${icon} ${disk.status.toUpperCase()} ALERT</div>
+        <div class="toast-body">${disk.mount_path} is at <strong>${disk.usage_percent.toFixed(1)}%</strong> usage</div>
+      `;
+      container.appendChild(toast);
+      setTimeout(() => {
+        toast.style.transition = 'opacity 0.4s, transform 0.4s';
+        toast.style.opacity = '0';
+        toast.style.transform = 'translateX(30px)';
+        setTimeout(() => toast.remove(), 400);
+      }, 5000);
+    }
+
+    function dismissBanner() {
+      document.getElementById('alert-banner').style.display = 'none';
+      bannerDismissed = true;
+    }
+
+    function renderAlertLog() {
+      const el = document.getElementById('alerts-log');
+      if (!alertLog.length) {
+        el.innerHTML = '<div class="empty-state">No alerts triggered yet.</div>';
+        return;
+      }
+      el.innerHTML = alertLog.map(a => `
+        <div class="alert-log-item ${a.type}">
+          <span class="alert-icon">${a.type === 'critical' ? '🚨' : '⚠️'}</span>
+          <span class="alert-log-msg"><strong>${a.type.toUpperCase()}</strong> — ${a.msg}</span>
+          <span class="alert-log-time">${a.time.toLocaleTimeString()}</span>
+        </div>
+      `).join('');
+    }
+
+    /* ── Status Bar ── */
+    function updateStatusBar(disks) {
+      const statuses = disks.map(d => d.status);
+      const overall = statuses.includes('critical') ? '🔴 Critical'
+                    : statuses.includes('warning')  ? '🟡 Warning'
+                    : '🟢 Normal';
+      document.getElementById('overall-status').textContent = overall;
+      document.getElementById('disk-count').textContent = disks.length;
+      document.getElementById('last-update').textContent = new Date().toLocaleTimeString();
+    }
+
+    /* ── API Calls ── */
+    async function fetchDiskData() {
+      try {
+        const res = await fetch(`${API}/disks`);
+        if (!res.ok) throw new Error('Bad response');
+        const data = await res.json();
+        document.getElementById('connection-err').style.display = 'none';
+        return data;
+      } catch (e) {
+        document.getElementById('connection-err').style.display = 'block';
+        return null;
+      }
+    }
+
+    async function saveThreshold(diskId) {
+      const w = parseFloat(document.getElementById(`warn-${diskId}`).value);
+      const c = parseFloat(document.getElementById(`crit-${diskId}`).value);
+      if (isNaN(w) || isNaN(c) || w >= c) {
+        alert('Warning must be less than critical threshold.');
+        return;
+      }
+      try {
+        await fetch(`${API}/threshold`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ disk_id: diskId, warning_percent: w, critical_percent: c })
+        });
+        showSimpleToast('Threshold updated ✓', '#22d3a1');
+      } catch (e) {
+        alert('Failed to save threshold. Is the backend running?');
+      }
+    }
+
+    function showSimpleToast(msg, color) {
+      const container = document.getElementById('toast-container');
+      const toast = document.createElement('div');
+      toast.className = 'toast';
+      toast.style.borderLeft = `3px solid ${color}`;
+      toast.innerHTML = `<div class="toast-body" style="color:${color}">${msg}</div>`;
+      container.appendChild(toast);
+      setTimeout(() => {
+        toast.style.transition = 'opacity 0.3s';
+        toast.style.opacity = '0';
+        setTimeout(() => toast.remove(), 300);
+      }, 2500);
+    }
+
+    /* ── Countdown ── */
+    let countdownTimer;
+    function startCountdown() {
+      clearInterval(countdownTimer);
+      countdownVal = COUNTDOWN;
+      document.getElementById('countdown-text').textContent = countdownVal + 's';
+      countdownTimer = setInterval(() => {
+        countdownVal--;
+        if (countdownVal <= 0) countdownVal = COUNTDOWN;
+        document.getElementById('countdown-text').textContent = countdownVal + 's';
+      }, 1000);
+    }
+
+    /* ── Main Poll Loop ── */
+    async function poll() {
+      const data = await fetchDiskData();
+      if (data && data.length) {
+        diskData = data;
+        renderDisks(data);
+        checkAlerts(data);
+        updateStatusBar(data);
+
+        // Build chart tabs only once
+        if (!activeChartDisk) {
+          buildChartTabs(data);
+          activeChartDisk = data[0].id;
+        }
+        loadChartData(activeChartDisk);
+      }
+    }
+
+    async function manualRefresh() {
+      countdownVal = COUNTDOWN; // reset countdown display
+      await poll();
+    }
+
+    /* ── Export CSV ── */
+    function exportCSV() {
+      if (!diskData.length) { alert('No data to export.'); return; }
+      const rows = [['Disk','Mount','Used GB','Free GB','Total GB','Usage %','Status','Recorded At']];
+      diskData.forEach(d => {
+        rows.push([d.name, d.mount_path, d.used_gb, d.free_gb, d.total_gb,
+                   d.usage_percent, d.status, d.recorded_at]);
+      });
+      const csv = rows.map(r => r.join(',')).join('\n');
+      const blob = new Blob([csv], { type: 'text/csv' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = 'diskwatch_export.csv'; a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    /* ── Theme Toggle ── */
+    function toggleTheme() {
+      document.body.classList.toggle('light');
+      localStorage.setItem('theme', document.body.classList.contains('light') ? 'light' : 'dark');
+    }
+
+    /* ── Init ── */
+    function init() {
+      // Restore theme
+      if (localStorage.getItem('theme') === 'light') document.body.classList.add('light');
+
+      initChart();
+      startCountdown();
+      poll(); // immediate first fetch
+
+      setInterval(() => {
+        poll();
+        startCountdown();
+      }, POLL_MS);
+
+      // Request browser notification permission
+      if (Notification.permission === 'default') {
+        setTimeout(() => Notification.requestPermission(), 2000);
+      }
+    }
+
+    init();
+  </script>
+</body>
+</html>
