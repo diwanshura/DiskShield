@@ -1,4 +1,7 @@
 # 💾 DiskWatch — Disk Space Monitor
+# Team Member 
+* Diwanshu
+* Vivek Kumar
 
 A clean, real-time disk monitoring dashboard.  
 Alerts you within **3 seconds** when disk usage hits warning/critical levels.
