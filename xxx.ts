@@ -44,6 +44,10 @@ class EmployeeRecordSystem {
   }
 
   deleteEmployee(id: number): boolean {
+    if (!this.employees.has(id)) {
+      throw new Error(`Employee with id ${id} does not exist.`);
+    }
+
     return this.employees.delete(id);
   }
 
