@@ -102,7 +102,7 @@ class EmployeeRecordSystem {
     }
   }
 
-  private isNonEmptyString(value: string): boolean {
+  private isNonEmptyString(value: unknown): boolean {
     return typeof value === 'string' && value.trim().length > 0;
   }
 }
