@@ -25,7 +25,7 @@ const assertNonEmptyString = (value: string, field: string): void => {
 
 const assertSalary = (salary: number): void => {
   if (!Number.isFinite(salary) || salary < 0) {
-    throw new Error('salary must be a non-negative number.');
+    throw new Error('Salary must be a non-negative number.');
   }
 };
 
